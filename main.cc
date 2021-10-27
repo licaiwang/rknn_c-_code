@@ -109,43 +109,6 @@ static unsigned char *load_model(const char *filename, int *model_size)
     return model;
 }
 
-static int rknn_GetTop(
-    float *pfProb,
-    float *pfMaxProb,
-    uint32_t *pMaxClass,
-    uint32_t outputCount,
-    uint32_t topNum)
-{
-    uint32_t i, j;
-
-#define MAX_TOP_NUM 20
-    if (topNum > MAX_TOP_NUM)
-        return 0;
-
-    memset(pfMaxProb, 0, sizeof(float) * topNum);
-    memset(pMaxClass, 0xff, sizeof(float) * topNum);
-
-    for (j = 0; j < topNum; j++)
-    {
-        for (i = 0; i < outputCount; i++)
-        {
-            if ((i == *(pMaxClass + 0)) || (i == *(pMaxClass + 1)) || (i == *(pMaxClass + 2)) ||
-                (i == *(pMaxClass + 3)) || (i == *(pMaxClass + 4)))
-            {
-                continue;
-            }
-
-            if (pfProb[i] > *(pfMaxProb + j))
-            {
-                *(pfMaxProb + j) = pfProb[i];
-                *(pMaxClass + j) = i;
-            }
-        }
-    }
-
-    return 1;
-}
-
 rknn_input_output_num print_model_info(rknn_context ctx)
 {
     int ret;
@@ -186,9 +149,9 @@ rknn_input_output_num print_model_info(rknn_context ctx)
     return io_num;
 }
 
-void predict_one_pic(cv::Mat img, rknn_context ctx, rknn_input_output_num io_num)
+int predict_one_pic(cv::Mat img, rknn_context ctx, rknn_input_output_num io_num)
 {
-    int ret;
+    int ret, predict;
     rknn_input inputs[1];
     memset(inputs, 0, sizeof(inputs));
     inputs[0].index = 0;
@@ -214,28 +177,22 @@ void predict_one_pic(cv::Mat img, rknn_context ctx, rknn_input_output_num io_num
     // Post Predict
     for (int i = 0; i < io_num.n_output; i++)
     {
-        uint32_t MaxClass[10];
-        float fMaxProb[10];
         float *buffer = (float *)outputs[i].buf;
-        uint32_t sz = outputs[i].size / 4;
-        rknn_GetTop(buffer, fMaxProb, MaxClass, sz, 10);
-        float max_prob = fMaxProb[0];
-        for (int i = 0; i < 10; i++)
-        {
-            printf("%3d: %8.6f\n", MaxClass[i], fMaxProb[i]);
-        }
-
-        if (max_prob < 0.5)
+        cout << buffer[0] << endl;
+        if (buffer[0] < 0.5)
         {
             printf("Predict Eyes Close \n\n");
+            predict = 0;
         }
         else
         {
             printf("Predict Eyes Open\n\n");
+            predict = 1;
         }
     }
     // Release rknn_outputs
     rknn_outputs_release(ctx, 1, outputs);
+    return predict;
 }
 
 string type2str(int type)
@@ -272,7 +229,6 @@ string type2str(int type)
         r = "User";
         break;
     }
-
     r += "C";
     r += (chans + '0');
     return r;
@@ -318,24 +274,96 @@ int main(int argc, char **argv)
     //     open index 到 2117 ~ 6834
     generate_test_data(Close_eyes_path, 0);
     generate_test_data(Open_eyes_path, 1);
+    cout << "Generate test data done! " << endl;
 
     // Load & Init RKNN Model And Caculate Time
     auto start = high_resolution_clock::now();
     model = load_model(model_path, &model_len);
+    cout << "load model done! " << endl;
     ret = rknn_init(&ctx, model, model_len, 0);
-    auto stop = high_resolution_clock::now();
     if (ret < 0)
     {
         throw std::runtime_error("rknn load model fail!");
     }
+    auto stop = high_resolution_clock::now();
+
     auto duration = duration_cast<microseconds>(stop - start);
     cout << "Load Model: " << duration.count() * micro << " seconds" << endl;
 
     // Get Model Input Output Info
-    rknn_input_output_num io_num = print_model_info(ctx);
-
+    // rknn_input_output_num io_num = print_model_info(ctx);
     // Predict One Picture
-    predict_one_pic(img, ctx, io_num);
+    // predict_one_pic(img, ctx, io_num);
+
+    // Confusion Matrix Staff
+    double TP = 0.0;
+    double FN = 0.0;
+    double TN = 0.0;
+    double FP = 0.0;
+    // Run On Test data
+    for (int i = 0; i < 6000; i++)
+    {
+        int tmp_res;
+        int lab = All_LABELS[i];
+        string img_path = All_PiC_PATH[i];
+        string _path;
+
+        i += 100;
+        if (lab == 0)
+        {
+            _path = "test/0/" + img_path;
+        }
+
+        if (lab == 1)
+        {
+            _path = "test/1/" + img_path;
+        }
+
+        // Load Temp image
+        cv::Mat org_img = imread(_path, cv::IMREAD_COLOR);
+        cout << "Read Image" << _path << endl;
+        input_checker(org_img);
+        // Preprocess
+        cv::Mat img = org_img.clone();
+        cv::resize(img, org_img, cv::Size(MODEL_IN_WIDTH, MODEL_IN_HEIGHT), (0, 0), (0, 0), cv::INTER_LINEAR);
+        cv::cvtColor(img, org_img, COLOR_BGR2RGB);
+        input_checker(img);
+        rknn_input_output_num io_num = print_model_info(ctx);
+        tmp_res = predict_one_pic(img, ctx, io_num);
+
+        cout << tmp_res << endl;
+        cout << lab << endl;
+
+        if (tmp_res == 1 && lab == 1)
+        {
+            TP += 1.0;
+        }
+        if (tmp_res == 1 && lab == 0)
+        {
+            FN += 1.0;
+        }
+
+        if (tmp_res == 0 && lab == 1)
+        {
+            TN += 1.0;
+        }
+        if (tmp_res == 0 && lab == 0)
+        {
+            FP += 1.0;
+        }
+    }
+
+    double ACC = (TP + TN) / (TP + FP + FN + TN);
+    double PRECISION = TP / (TP + FP);
+    double RECALL = TP / (TP + FN);
+    double F1_SCORE = 2 / ((1 / PRECISION) + (1 / RECALL));
+
+    cout << "TEST ACC ---" << ACC << endl;
+    cout << "TEST PRECISION ---" << PRECISION << endl;
+    cout << "TEST RECALL --- " << RECALL << endl;
+    cout << "TEST F1_SCORE ---" << F1_SCORE << endl;
+    cout << "TEST  FP ( Danger !!!)" << FP << endl;
+    cout << "TEST  FN  ---" << FN << endl;
 
     // Release
     if (ctx >= 0)
