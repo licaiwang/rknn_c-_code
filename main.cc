@@ -112,15 +112,15 @@ static unsigned char *load_model(const char *filename, int *model_size)
 rknn_input_output_num print_model_info(rknn_context ctx)
 {
     int ret;
-    printf("Reading Model INFO...");
+    //printf("Reading Model INFO...");
     rknn_input_output_num io_num;
     ret = rknn_query(ctx, RKNN_QUERY_IN_OUT_NUM, &io_num, sizeof(io_num));
     if (ret != RKNN_SUCC)
     {
         throw std::runtime_error("rknn_query fail! ret");
     }
-    printf("model input num: %d, output num: %d\n", io_num.n_input, io_num.n_output);
-    printf("input tensors:\n");
+    //printf("model input num: %d, output num: %d\n", io_num.n_input, io_num.n_output);
+    //printf("input tensors:\n");
     rknn_tensor_attr input_attrs[io_num.n_input];
     memset(input_attrs, 0, sizeof(input_attrs));
     for (int i = 0; i < io_num.n_input; i++)
@@ -131,9 +131,9 @@ rknn_input_output_num print_model_info(rknn_context ctx)
         {
             throw std::runtime_error("rknn_query fail! ret");
         }
-        printRKNNTensor(&(input_attrs[i]));
+        // printRKNNTensor(&(input_attrs[i]));
     }
-    printf("output tensors:\n");
+    //printf("output tensors:\n");
     rknn_tensor_attr output_attrs[io_num.n_output];
     memset(output_attrs, 0, sizeof(output_attrs));
     for (int i = 0; i < io_num.n_output; i++)
@@ -144,7 +144,7 @@ rknn_input_output_num print_model_info(rknn_context ctx)
         {
             throw std::runtime_error("rknn_query fail! ret");
         }
-        printRKNNTensor(&(output_attrs[i]));
+        //printRKNNTensor(&(output_attrs[i]));
     }
     return io_num;
 }
@@ -155,7 +155,7 @@ int predict_one_pic(cv::Mat img, rknn_context ctx, rknn_input_output_num io_num)
     rknn_input inputs[1];
     memset(inputs, 0, sizeof(inputs));
     inputs[0].index = 0;
-    inputs[0].type = RKNN_TENSOR_UINT8;
+    inputs[0].type = RKNN_TENSOR_FLOAT32;
     inputs[0].size = img.cols * img.rows * img.channels();
     inputs[0].fmt = RKNN_TENSOR_NHWC;
     inputs[0].buf = img.data;
@@ -178,15 +178,12 @@ int predict_one_pic(cv::Mat img, rknn_context ctx, rknn_input_output_num io_num)
     for (int i = 0; i < io_num.n_output; i++)
     {
         float *buffer = (float *)outputs[i].buf;
-        cout << buffer[0] << endl;
-        if (buffer[0] < 0.5)
+        if (buffer[0] > buffer[1])
         {
-            printf("Predict Eyes Close \n\n");
             predict = 0;
         }
         else
         {
-            printf("Predict Eyes Open\n\n");
             predict = 1;
         }
     }
@@ -251,23 +248,9 @@ int main(int argc, char **argv)
     int ret;
     int model_len = 0;
     // INPUT PIC INFO
-    const int MODEL_IN_WIDTH = 128;
-    const int MODEL_IN_HEIGHT = 128;
-    const int MODEL_IN_CHANNELS = 3;
-    // Temp
-    string path = "img/0_1.png";
-    cout << "Read close eye pic from " << path << endl;
-    // Load Temp image
-    cv::Mat org_img = imread(path, cv::IMREAD_COLOR);
-    input_checker(org_img);
-    // Preprocess
-    cv::Mat img = org_img.clone();
-    cv::resize(img, org_img, cv::Size(MODEL_IN_WIDTH, MODEL_IN_HEIGHT), (0, 0), (0, 0), cv::INTER_LINEAR);
-    cv::cvtColor(img, org_img, COLOR_BGR2RGB);
-    input_checker(img);
-    // Check Input Type
-    string ty = type2str(img.type());
-    printf("Matrix: %s %dx%d \n", ty.c_str(), img.cols, img.rows);
+    const int MODEL_IN_WIDTH = 96;
+    const int MODEL_IN_HEIGHT = 96;
+    const int MODEL_IN_CHANNELS = 1;
 
     // Generate Test Data
     //    close index 到 2116
@@ -277,7 +260,7 @@ int main(int argc, char **argv)
     cout << "Generate test data done! " << endl;
 
     // Load & Init RKNN Model And Caculate Time
-    auto start = high_resolution_clock::now();
+    // auto start = high_resolution_clock::now();
     model = load_model(model_path, &model_len);
     cout << "load model done! " << endl;
     ret = rknn_init(&ctx, model, model_len, 0);
@@ -285,30 +268,27 @@ int main(int argc, char **argv)
     {
         throw std::runtime_error("rknn load model fail!");
     }
-    auto stop = high_resolution_clock::now();
-
-    auto duration = duration_cast<microseconds>(stop - start);
-    cout << "Load Model: " << duration.count() * micro << " seconds" << endl;
-
+    // auto stop = high_resolution_clock::now();
+    // auto duration = duration_cast<microseconds>(stop - start);
+    // cout << "Load Model: " << duration.count() * micro << " seconds" << endl;
     // Get Model Input Output Info
     // rknn_input_output_num io_num = print_model_info(ctx);
-    // Predict One Picture
+    // Predict 1 Picture
     // predict_one_pic(img, ctx, io_num);
-
     // Confusion Matrix Staff
     double TP = 0.0;
     double FN = 0.0;
     double TN = 0.0;
     double FP = 0.0;
     // Run On Test data
-    for (int i = 0; i < 6000; i++)
+    for (int i = 0; i < All_LABELS.size(); i++)
     {
         int tmp_res;
         int lab = All_LABELS[i];
+        double minVal, maxVal;
         string img_path = All_PiC_PATH[i];
         string _path;
 
-        i += 100;
         if (lab == 0)
         {
             _path = "test/0/" + img_path;
@@ -321,33 +301,40 @@ int main(int argc, char **argv)
 
         // Load Temp image
         cv::Mat org_img = imread(_path, cv::IMREAD_COLOR);
-        cout << "Read Image" << _path << endl;
-        input_checker(org_img);
         // Preprocess
-        cv::Mat img = org_img.clone();
-        cv::resize(img, org_img, cv::Size(MODEL_IN_WIDTH, MODEL_IN_HEIGHT), (0, 0), (0, 0), cv::INTER_LINEAR);
-        cv::cvtColor(img, org_img, COLOR_BGR2RGB);
-        input_checker(img);
+        cv::Mat processed_img = cv::Mat::zeros(MODEL_IN_HEIGHT, MODEL_IN_WIDTH, CV_32F);
+        cv::cvtColor(org_img, org_img, COLOR_BGR2GRAY);
+        cv::resize(org_img, org_img, cv::Size(MODEL_IN_WIDTH, MODEL_IN_HEIGHT), (0, 0), (0, 0), cv::INTER_LINEAR);
+        minMaxLoc(org_img, &minVal, &maxVal);
+        for (int i = 0; i != MODEL_IN_HEIGHT; ++i)
+        {
+            for (int j = 0; j != MODEL_IN_WIDTH; ++j)
+            {
+                float pixel = unsigned(org_img.at<uint8_t>(i, j));
+                processed_img.at<float>(i, j) = 2 * ((pixel - minVal) / (maxVal - minVal)) - 1;
+            }
+        }
+        cv::Mat img = processed_img.clone();
         rknn_input_output_num io_num = print_model_info(ctx);
         tmp_res = predict_one_pic(img, ctx, io_num);
 
-        cout << tmp_res << endl;
-        cout << lab << endl;
+        cout << "Read Image" << _path << endl;
+        cout << "pic --- " << i + 1 << endl;
 
-        if (tmp_res == 1 && lab == 1)
+        if (tmp_res == lab && lab == 1)
         {
             TP += 1.0;
         }
-        if (tmp_res == 1 && lab == 0)
+        if (tmp_res != lab && lab == 1)
         {
             FN += 1.0;
         }
 
-        if (tmp_res == 0 && lab == 1)
+        if (tmp_res == lab && lab == 0)
         {
             TN += 1.0;
         }
-        if (tmp_res == 0 && lab == 0)
+        if (tmp_res != lab && lab == 0)
         {
             FP += 1.0;
         }
